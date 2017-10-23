@@ -1,4 +1,5 @@
 import numpy as np
+import datetime
 
 def getConstrainedStructureDataset(Ndata,Natoms):
     """
@@ -48,3 +49,32 @@ def makeConstrainedStructure(Natoms):
                 Xinit[2*i:2*i+2] = xnew
                 break
     return Xinit
+
+
+
+
+def saveModel(filename,KRR=None,HO=None,comment=None):
+    """
+
+    """
+    if KRR==None:
+        KRR = 'No KRR model was saved'
+    if HO==None:
+        HO = 'No HO object was saved'
+    if comment==None:
+        comment = 'No comment was saved'
+    if comment=='date':
+        comment = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    np.save(filename,np.array([KRR,HO,comment]))
+
+
+def loadModel(filename):
+    """
+
+    """
+
+    KRR,HO,comment = np.load(filename)[:]
+    return KRR,HO,comment
+    
+

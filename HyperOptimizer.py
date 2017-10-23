@@ -73,7 +73,7 @@ class HyperOptimizer():
 
 
 
-    def gridSearch(self,sigma_guess_arr):
+    def gridSearch(self,sigma_guess_arr,verbose=False):
         """
         Performs gridsearch over sigma values in sigma_guess_arr
         """
@@ -81,7 +81,9 @@ class HyperOptimizer():
         err = np.zeros(Nsig)
         
         for i in range(Nsig):
-            err[i],_= self._sigmaObjective(sigma_guess_arr[i])
+            err[i],_= self._sigmaObjective(sigma_guess_arr[i],getGrad=False)
+            if verbose:
+                print('Grid Search:\tError = %4.6f\t sigma = %4.6f' %(err[i],sigma_guess_arr[i]))
         return sigma_guess_arr[np.argmin(err)]
         
     def optimize(self):
@@ -121,7 +123,7 @@ class HyperOptimizer():
         self.krr.fit(self.E,featureMat=self.G)
 
 
-    def optimizeSigmaVec(self,method='constant_step',verbose=True):
+    def optimizeSigmaVec(self,method='constant_hlr',verbose=False):
         """
         """
         # Initial values for sigma
@@ -142,7 +144,7 @@ class HyperOptimizer():
                 self.krr.sigmaVec = self.krr.sigmaVec - self.hlr*grad
 
                 if verbose:
-                    print('Error = %g' %(error))
+                    print('Gradient Descent:\tError = %4.6f' %(error))
         else:
             options={'maxiter': self.runs}
             res = minimize(fun=self._sigmaVecObjective,
@@ -157,7 +159,29 @@ class HyperOptimizer():
         self.optimal_sigVec = self.krr.sigmaVec
         self.krr.fitSV(self.E,featureMat=self.G,sigmaVec = self.krr.sigmaVec)
 
-    def _sigmaObjective(self,sigma):
+
+
+    def initializeSigmaVec(self,m,q):
+        """
+        Calculates an initial guess for the sigmaVec based on the feature space density
+        """
+
+        # Get distance matrix
+        distmat = np.sqrt(self.krr.comparator.getDistMat(self.G,self.G))
+
+        # Sort and remove the first column after sorting (which are always zeros)
+        distmat = np.sort(distmat,axis=1)[:,1:]
+
+        # Do exponential scaling of the distance and sum the m nearest points
+        # sigmaVec = np.sum(np.exp(-q*np.power(distmat[:,0:m],2)),axis=1)
+        # sigmaVec = np.mean(np.sqrt(distmat[:,0:m]),axis=1)
+        sigmaVec = np.mean(distmat[:,0:m],axis=1)
+        return sigmaVec
+        
+        
+        
+
+    def _sigmaObjective(self,sigma,getGrad=True):
         """
         """
 
@@ -174,16 +198,16 @@ class HyperOptimizer():
             Epred = self.krr.predict(Gtrain,Gval)
             error[ki] = (Eval-Epred).T@(Eval-Epred)
 
-            # Gradients from each cross validation fold are added
-            grad += self.krr.getSigmaGradient(Gtrain,Gval,Etrain,Eval)
+            if getGrad:
+                # Gradients from each cross validation fold are added
+                grad += self.krr.getSigmaGradient(Gtrain,Gval,Etrain,Eval)
 
         error = np.mean(error)
 
-        print('Error = %4.12f' %(error))
         return error,self.Ntrain*grad
         
 
-    def _sigmaVecObjective(self,sigmaVec):
+    def _sigmaVecObjective(self,sigmaVec,getGrad=True):
         """
         Performs k-fold cross validation and returns validation error and hyper parameter gradient.
         For use with scipy.optimize.minimize
@@ -201,10 +225,10 @@ class HyperOptimizer():
             Epred = self.krr.predictSigmaVec(Gtrain,Gval,sigmaVec=sigmaVec[ids_for_train])
             error[ki] = (Eval-Epred).T@(Eval-Epred)
 
-            # Gradients from each cross validation fold are added
-            tic1 = time.time()
-            grad[ids_for_train] += self.krr.getSigmaVecGradient(Gtrain,Gval,Etrain,Eval,sigmaVec[ids_for_train])
-            grad_time= time.time() - tic1
+            if getGrad:
+                # Gradients from each cross validation fold are added
+                grad[ids_for_train] += self.krr.getSigmaVecGradient(Gtrain,Gval,Etrain,Eval,sigmaVec[ids_for_train])            
+                
             
         total_time = time.time() - tic
         error = np.mean(error)
