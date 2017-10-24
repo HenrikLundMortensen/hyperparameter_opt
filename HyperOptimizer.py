@@ -1,5 +1,5 @@
 import numpy as np
-import IPython
+from IPython import embed
 import time
 from scipy.optimize import minimize
 
@@ -63,13 +63,14 @@ class HyperOptimizer():
 
         # The remaining part is validation 
         ids_val = self.ids_split[ki]
-
+        
         Gtrain = self.G[ids_train]
         Etrain = self.E[ids_train]
+
         Gval = self.G[ids_val]    
         Eval = self.E[ids_val]
 
-        return Gtrain,Gval,Etrain,Eval,ids_train
+        return Gtrain,Gval,Etrain,Eval,ids_train,ids_val
 
 
 
@@ -84,7 +85,7 @@ class HyperOptimizer():
             err[i],_= self._sigmaObjective(sigma_guess_arr[i],getGrad=False)
             if verbose:
                 print('Grid Search:\tError = %4.6f\t sigma = %4.6f' %(err[i],sigma_guess_arr[i]))
-        return sigma_guess_arr[np.argmin(err)]
+        return sigma_guess_arr[np.argmin(err)],min(err)
         
     def optimize(self):
         """
@@ -127,12 +128,18 @@ class HyperOptimizer():
         """
         """
         # Initial values for sigma
-
+        
         if method=='constant_hlr':
             minerr = 0
             for i in range(self.runs):
-                error,grad = self._sigmaVecObjective(self.krr.sigmaVec)
+                error,grad,total_time,K_toc,grad_toc,fitSV_toc,predictSV_toc = self._sigmaVecObjective(self.krr.sigmaVec)
 
+                # print('Total time = %4.10f' %(total_time))
+                # print('K time = %4.10f' %(K_toc))                
+                # print('grad time = %4.10f' %(grad_toc))
+                # print('fitSV time = %4.10f' %(fitSV_toc))
+                # print('predictSV time = %4.10f\n' %(predictSV_toc))
+                
                 if minerr != 0:
                     if minerr > error:
                         minerr = error
@@ -144,7 +151,7 @@ class HyperOptimizer():
                 self.krr.sigmaVec = self.krr.sigmaVec - self.hlr*grad
 
                 if verbose:
-                    print('Gradient Descent:\tError = %4.6f' %(error))
+                    print('Gradient Descent:\tError = %4.6f\t run: %i/%i' %(error,i,self.runs))
         else:
             options={'maxiter': self.runs}
             res = minimize(fun=self._sigmaVecObjective,
@@ -159,8 +166,6 @@ class HyperOptimizer():
         self.optimal_sigVec = self.krr.sigmaVec
         self.krr.fitSV(self.E,featureMat=self.G,sigmaVec = self.krr.sigmaVec)
 
-
-
     def initializeSigmaVec(self,m,q):
         """
         Calculates an initial guess for the sigmaVec based on the feature space density
@@ -168,7 +173,8 @@ class HyperOptimizer():
 
         # Get distance matrix
         distmat = np.sqrt(self.krr.comparator.getDistMat(self.G,self.G))
-
+        self.distmat = distmat
+        
         # Sort and remove the first column after sorting (which are always zeros)
         distmat = np.sort(distmat,axis=1)[:,1:]
 
@@ -188,19 +194,26 @@ class HyperOptimizer():
         grad = 0
         error = np.zeros(self.k)
 
-        self.krr.comparator.sigma = sigma
+
+        self.krr.comparator.sigma = sigma        
+        K = self.krr.comparator.getKernelMat(self.G,self.G,distmat=self.distmat)
+        
         # Cross validation
         for ki in range(self.k):
-            Gtrain,Gval,Etrain,Eval,ids_for_train = self._get_train_and_val(ki)
-            self.krr.fit(Etrain,featureMat=Gtrain)
+            Gtrain,Gval,Etrain,Eval,ids_train,ids_val = self._get_train_and_val(ki)
+
+            Ktrain = K[np.ix_(ids_train,ids_train)]
+            Kval = K[np.ix_(ids_val,ids_train)]
+            
+            self.krr.fit(Etrain,featureMat=Gtrain,similarityMat=Ktrain)
 
             # Calculate error
-            Epred = self.krr.predict(Gtrain,Gval)
+            Epred = self.krr.predict(Gtrain,Gval,K=Kval)
             error[ki] = (Eval-Epred).T@(Eval-Epred)
-
+            
             if getGrad:
                 # Gradients from each cross validation fold are added
-                grad += self.krr.getSigmaGradient(Gtrain,Gval,Etrain,Eval)
+                grad += self.krr.getSigmaGradient(Ktrain,Kval,Gtrain,Gval,Etrain,Eval)
 
         error = np.mean(error)
 
@@ -213,29 +226,59 @@ class HyperOptimizer():
         For use with scipy.optimize.minimize
         """
 
+        K_toc = 0
+        grad_toc = np.zeros(self.k)
+        fitSV_toc = np.zeros(self.k)
+        predictSV_toc = np.zeros(self.k)
+
         grad = np.zeros(len(self.ids))
         error = np.zeros(self.k)
+        tic_total = time.time()
+
         tic = time.time()
+        K = self.krr.comparator.getSigmaVecKernelMat(self.G,self.G,sigmaVec,distmat=self.distmat)
+        K_toc = time.time() - tic
+        # embed()
+        
         # Cross validation
         for ki in range(self.k):
-            Gtrain,Gval,Etrain,Eval,ids_for_train = self._get_train_and_val(ki)
-            self.krr.fitSV(Etrain,featureMat=Gtrain,sigmaVec=sigmaVec[ids_for_train])
+            Gtrain,Gval,Etrain,Eval,ids_train,ids_val = self._get_train_and_val(ki)
+
+            Ktrain = K[np.ix_(ids_train,ids_train)]
+            Kval = K[np.ix_(ids_val,ids_train)]
+
+            disttrain = self.distmat[np.ix_(ids_train,ids_train)]
+            distval = self.distmat[np.ix_(ids_val,ids_train)]
+
+            dKtrainds = np.power(sigmaVec[ids_train],-3)*np.power(disttrain,2)*Ktrain
+            dKvalds = np.power(sigmaVec[ids_train],-3)*np.power(distval,2)*Kval            
+            
+            tic = time.time()
+            self.krr.fitSV(Etrain,featureMat=Gtrain,sigmaVec=sigmaVec[ids_train],similarityMat=Ktrain)
+            fitSV_toc[ki] = time.time() - tic
 
             # Calculate error
-            Epred = self.krr.predictSigmaVec(Gtrain,Gval,sigmaVec=sigmaVec[ids_for_train])
+            tic = time.time()
+            Epred = self.krr.predictSigmaVec(Gtrain,Gval,sigmaVec=sigmaVec[ids_train],K=Kval)
+            predictSV_toc[ki] = time.time()-tic
+            
             error[ki] = (Eval-Epred).T@(Eval-Epred)
 
             if getGrad:
+                tic = time.time()
                 # Gradients from each cross validation fold are added
-                grad[ids_for_train] += self.krr.getSigmaVecGradient(Gtrain,Gval,Etrain,Eval,sigmaVec[ids_for_train])            
+                grad[ids_train] += self.krr.getSigmaVecGradient(Ktrain,Kval,dKtrainds,dKvalds,Gtrain,Gval,
+                                                                Etrain,Eval,sigmaVec[ids_train])
+                # _,K_toc[ki],dK_toc[ki],dEval_toc[ki],p_toc[ki] = self.krr.getSigmaVecGradientWithTimeAnalysis(Gtrain,Gval,Etrain,Eval,sigmaVec[ids_train])
+                grad_toc[ki] = time.time()-tic                
                 
-            
-        total_time = time.time() - tic
+                
+        total_time = time.time() - tic_total
         error = np.mean(error)
 
         # print('Error = %4.12f, grad_time = %4.12f, total_time = %4.12f' %(error,grad_time,total_time))
         # print('Error = %4.12f' %(error))        
-        return error,grad
+        return error,grad,total_time,K_toc,np.sum(grad_toc),np.sum(fitSV_toc),np.sum(predictSV_toc),
 
         
 

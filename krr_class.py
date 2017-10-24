@@ -5,6 +5,7 @@ from bob_features import bob_features
 from eksponentialComparator import eksponentialComparator
 from gaussComparator import gaussComparator
 import IPython
+import time
 
 
 class krr_class():
@@ -24,7 +25,7 @@ class krr_class():
 
         assert self.comparator is not None
         
-    def fit(self, data_values, featureMat=None, positionMat=None, reg=None):
+    def fit(self, data_values, featureMat=None, positionMat=None, reg=None, similarityMat=None):
         self.data_values = data_values
 
         # calculate features form positions if they are not given
@@ -38,7 +39,12 @@ class krr_class():
         if reg is not None:
             self.reg = reg
 
-        self.similarityMat = self.comparator.getKernelMat(self.featureMat,self.featureMat)
+        if similarityMat is None:
+            self.similarityMat = self.comparator.getKernelMat(self.featureMat,self.featureMat)
+        else:
+            self.similarityMat = similarityMat
+
+
         
 
         self.beta = np.mean(data_values)
@@ -49,7 +55,7 @@ class krr_class():
         self.alpha = self.invA@(self.data_values-self.beta)
         # self.alpha = np.linalg.solve(A, self.data_values - self.beta)
 
-    def fitSV(self, data_values, featureMat=None, positionMat=None, reg=None,sigmaVec=None):
+    def fitSV(self, data_values, featureMat=None, positionMat=None, reg=None,sigmaVec=None,similarityMat=None):
         self.data_values = data_values
 
         # calculate features form positions if they are not given
@@ -62,13 +68,20 @@ class krr_class():
 
         if reg is not None:
             self.reg = reg
-        self.similarityMat = self.comparator.getSigmaVecKernelMat(self.featureMat,self.featureMat,sigmaVec)
 
+        if similarityMat is None:
+            print('Ping')
+            self.similarityMat = self.comparator.getSigmaVecKernelMat(self.featureMat,self.featureMat,sigmaVec)
+        else:
+            self.similarityMat = similarityMat
+        
         self.beta = np.mean(data_values)
-
+        
         A = self.similarityMat + self.Ntrain/2*self.reg*np.identity(self.data_values.shape[0])
         self.beta=0
-        self.invA =np.linalg.inv(A)        
+        # tic = time.time()
+        self.invA =np.linalg.inv(A)
+        # print('Inversion A time = %4.10f' %(time.time()-tic))
         self.alpha = self.invA@(self.data_values-self.beta)
         # self.alpha = np.linalg.solve(A, self.data_values - self.beta)        
 
@@ -182,16 +195,20 @@ class krr_class():
         var_force = np.var(force, axis=0)        
         return MSE_force / var_force
 
-    def predict(self,FMatTrain,FMatVal):
+    def predict(self,FMatTrain,FMatVal,K=None):
         """
         """
-        K = self.comparator.getKernelMat(FMatTrain,FMatVal)
+        if K is None:
+            K = self.comparator.getKernelMat(FMatTrain,FMatVal)
+        
         return K@self.alpha
 
-    def predictSigmaVec(self,FMatTrain,FMatVal,sigmaVec):
+    def predictSigmaVec(self,FMatTrain,FMatVal,sigmaVec=None,K=None):
         """
         """
-        K = self.comparator.getSigmaVecKernelMat(FMatTrain,FMatVal,sigmaVec)
+        if K is None:
+            K = self.comparator.getSigmaVecKernelMat(FMatTrain,FMatVal,sigmaVec)
+            
         return K@self.alpha
     
     def getSigmaGradient(self,FMatTrain,FMatVal,Y,Yval):
@@ -212,28 +229,67 @@ class krr_class():
         p =2/Nval*Kval.T@(Yval - Kval@alpha)@self.invA*Ntrain/2
         return dEvalds + p@(2/Ntrain*dKtrainds@alpha)
 
-    def getSigmaVecGradient(self,FMatTrain,FMatVal,Y,Yval,sigmaVec):
+    def getSigmaVecGradient(self,Ktrain,Kval,dKtrainds,dKvalds,FMatTrain,FMatVal,Y,Yval,sigmaVec):
         """
         """
 
         Ntrain = FMatTrain.shape[0]
         Nval = FMatVal.shape[0]
 
-        Ktrain = self.comparator.getSigmaVecKernelMat(FMatTrain,FMatTrain,sigmaVec)
-        Kval = self.comparator.getSigmaVecKernelMat(FMatTrain,FMatVal,sigmaVec)
-
-        dKtrainds = self.comparator.getSigmaDerivSigmaVecKernelMat(FMatTrain,FMatTrain,sigmaVec)
-        dKvalds = self.comparator.getSigmaDerivSigmaVecKernelMat(FMatTrain,FMatVal,sigmaVec)
+        # dKtrainds2 = self.comparator.getSigmaDerivSigmaVecKernelMat(FMatTrain,FMatTrain,sigmaVec)
+        # dKvalds2 = self.comparator.getSigmaDerivSigmaVecKernelMat(FMatTrain,FMatVal,sigmaVec)
         # print('dKvalds.shape = %s' %((dKvalds.shape,)))
-        # print('Kval.shape = %s' %((Kval.shape,)))
+        # print('dKvalds2.shape = %s' %((dKvalds2.shape,)))
+
+        # print('dKtrainds.shape = %s' %((dKtrainds.shape,)))
+        # print('dKtrainds2.shape = %s' %((dKtrainds2.shape,))) 
+
+        # print('dKvalds match %s' %(np.allclose(dKvalds,dKvalds2)))
+        # print('dKtrainds match %s' %(np.allclose(dKtrainds,dKtrainds2)))
+
+        # IPython.embed()
+        
         alpha = self.alpha
-        
-        dEvalds = np.array([-1/Nval*( alpha[i]*dKvalds[:,i].T@(Yval-Kval@alpha) + (Yval-Kval@alpha).T@dKvalds[:,i]*alpha[i]) for i in range(Ntrain)])
+
+        dEvalds = -1/Nval*( (alpha*dKvalds).T@(Yval-Kval@alpha) + (Yval-Kval@alpha).T@dKvalds*alpha)
         p =2/Nval*Kval.T@(Yval - Kval@alpha)@self.invA*Ntrain/2
-        return dEvalds + np.array([p@(2/Ntrain*dKtrainds[:,i]*alpha[i]) for i in range(Ntrain)])
+        res = dEvalds + 2/Ntrain*p@dKtrainds*alpha
+        return res
 
+
+    def getSigmaVecGradientWithTimeAnalysis(self,Ktrain,Kval,dKtrainds,dKvalds,FMatTrain,FMatVal,Y,Yval,sigmaVec):
+        """
+        """
+        
+        Ntrain = FMatTrain.shape[0]
+        Nval = FMatVal.shape[0]
+        
+        tic = time.time()
+        Ktrain2 = self.comparator.getSigmaVecKernelMat(FMatTrain,FMatTrain,sigmaVec)
+        Kval2 = self.comparator.getSigmaVecKernelMat(FMatTrain,FMatVal,sigmaVec)
+        K_toc = time.time() - tic
+        
+
+        tid = time.time()
+        dKtrainds2 = self.comparator.getSigmaDerivSigmaVecKernelMat(FMatTrain,FMatTrain,sigmaVec)
+        dKvalds2 = self.comparator.getSigmaDerivSigmaVecKernelMat(FMatTrain,FMatVal,sigmaVec)
+        dK_toc = time.time() - tic
 
         
+        # print('dKvalds.shape = %s' %((dKvalds.shape,)))
+
+        alpha = self.alpha
+
+
+        tic = time.time()
+        dEvalds = np.array([-1/Nval*( alpha[i]*dKvalds[:,i].T@(Yval-Kval@alpha) + (Yval-Kval@alpha).T@dKvalds[:,i]*alpha[i]) for i in range(Ntrain)])
+        dEval_toc = time.time() - tic
+
+        tic = time.time()
+        p =2/Nval*Kval.T@(Yval - Kval@alpha)@self.invA*Ntrain/2
+        p_toc = time.time()-tic
+        return dEvalds + np.array([p@(2/Ntrain*dKtrainds[:,i]*alpha[i]) for i in range(Ntrain)]),K_toc,dK_toc,dEval_toc,p_toc
+
 
     
 def createData(Ndata, theta):

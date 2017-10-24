@@ -9,7 +9,7 @@ from bob_features import bob_features
 from gaussComparator import gaussComparator
 
 
-np.random.seed(13)
+np.random.seed(14)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--Ndata",type=int,help="Number of data points to be generated for training/validation",default=200)
@@ -28,7 +28,6 @@ hlr = args.hlr
 savefile = args.savefile
 m = args.m
 q = args.q
-
 
 # Parameters for double well LJ potential
 eps, r0, sigma = 1.8, 1.1, np.sqrt(0.02)
@@ -57,18 +56,27 @@ Etest,Ftest = getEnergyAndForces(doubleLJ,Xtest,Natoms,params)
 HO = HyperOptimizer(krr,
                     G=G,
                     E=E,
-                    runs=30,
+                    runs=100,
                     sig=0.5,
                     hlr=hlr,
                     tol = 1e-6,
                     k=5)
 
-sigma_arr = np.linspace(0.6,1,2)
-# BestGSSigma = HO.gridSearch(sigma_arr,verbose=True) 
-# print('BestGSSigma = %g' %(BestGSSigma))
-
 HO.krr.sigmaVec = HO.initializeSigmaVec(m,q)
+print(np.mean(HO.krr.sigmaVec))
+sigma_arr = np.linspace(0.2,0.4,30)
+BestGSSigma,minerr = HO.gridSearch(sigma_arr,verbose=True)
+HO.krr.comparator.sigma = BestGSSigma
+HO.krr.fit(E,featureMat=G)
+print('BestGSSigma = %4.10f, min error = %4.10f' %(BestGSSigma,minerr))
+
+
+Epred = krr.predict(G,Gtest)
+err_before = (Epred-Etest).T@(Epred-Etest)
+
 print(HO.krr.sigmaVec)
-
-
 HO.optimizeSigmaVec(verbose=True)
+
+
+Epred = krr.predictSigmaVec(G,Gtest,sigmaVec=HO.optimal_sigVec)
+err_after = (Epred-Etest).T@(Epred-Etest)

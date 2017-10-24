@@ -37,22 +37,32 @@ class gaussComparator():
         d = sqeuclidean(feature1, feature2)
         return np.exp(-1/(2*sigma**2)*d)
 
-    def getKernelMat(self,FMat1,FMat2):
+    def getKernelMat(self,FMat1,FMat2,sigma=None,distmat=None):
         """
         Returns the kernel matrix where (kernelMat)_ij = kernel(FMat1[i],FMat2[j])
         """
-        kernelMat = np.array([[self.single_comparison(f1, f2, self.sigma)
-                                        for f1 in FMat1]
-                                       for f2 in FMat2])
+        if sigma is None:
+            sigma = self.sigma
+        
+        if distmat is None:
+            kernelMat = np.array([[self.single_comparison(f1, f2, sigma)
+                                   for f1 in FMat1]
+                                  for f2 in FMat2])
+        else:
+            kernelMat = np.exp(-1/(2*sigma**2)*np.power(distmat,2))
         return kernelMat
 
-    def getSigmaVecKernelMat(self,FMat1,FMat2,sigmaVec):
+    def getSigmaVecKernelMat(self,FMat1,FMat2,sigmaVec,distmat=None):
         """
         Returns the kernel matrix where (kernelMat)_ij = kernel(FMat1[i],FMat2[j])
         """
-        SVkernelMat = np.array([[self.single_comparison(f1, f2, sigmaVec[i])
-                                        for i,f1 in enumerate(FMat1)]
-                                       for f2 in FMat2])
+
+        if distmat is None:
+            SVkernelMat = np.array([[self.single_comparison(f1, f2, sigmaVec[i])
+                                     for i,f1 in enumerate(FMat1)]
+                                    for f2 in FMat2])
+        else:
+            SVkernelMat = np.exp(-0.5*(np.power(sigmaVec,-2)*np.power(distmat,2)))
         return SVkernelMat
 
 
